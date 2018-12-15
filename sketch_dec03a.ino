@@ -1,8 +1,9 @@
-#include <WiFi.h*>
+#include <WiFi.h>
 #include "dht.h"
 #include <Wire.h>
 #include <HTTPClient.h>
-
+#include <PubSubClient.h>
+#include <WiFiClient.h>
 #include "SSD1306.h"
 
 dht DHT;
@@ -11,10 +12,15 @@ dht DHT;
 
 
 HTTPClient http;
-const char* ssid     = "MISZCZU ver.BETA";
-const char* password = "igorciul";
+const char* ssid = "Glaadiss";
+const char* password = "worms1234";
+const char* ssid2     = "MISZCZU ver.BETA";
+const char* password2 = "igorciul";
 
 WiFiServer server(80);
+WiFiClient espClient;
+const char* mqtt_server = "35.234.88.22";
+PubSubClient client(espClient);
 
 static char celsiusTemp[7];
 static char fahrenheitTemp[7];
@@ -51,6 +57,32 @@ void loadSensorData() {
 
 }
 
+void getExternalIp()
+{
+  WiFiClient client;
+  if (!client.connect("api.ipify.org", 80)) {
+    Serial.println("Failed to connect with 'api.ipify.org' !");
+  }
+  else {
+    int timeout = millis() + 5000;
+    client.print("GET /?format=json HTTP/1.1\r\nHost: api.ipify.org\r\n\r\n");
+    while (client.available() == 0) {
+      if (timeout - millis() < 0) {
+        Serial.println(">>> Client Timeout !");
+        client.stop();
+        return;
+      }
+    }
+    int size;
+    while ((size = client.available()) > 0) {
+      uint8_t* msg = (uint8_t*)malloc(size);
+      size = client.read(msg, size);
+      Serial.write(msg, size);
+      free(msg);
+    }
+  }
+}
+
 void showSensorData(){
 //  display.setColor(BLACK);
 //  display.fillRect(0, 0, 120, 80);
@@ -65,19 +97,49 @@ void showSensorData(){
   display.display();
 }
 
-void coreTask( void * pvParameters ){
-    String taskMessage = "Task running on core ";
-    taskMessage = taskMessage + xPortGetCoreID();
-    while(true){
-      Serial.println(taskMessage);
-      delay(10000);
-      loadSensorData();
-      showSensorData();
-    }
+void callback(char* topic, byte* message, unsigned int length) {
+  Serial.print("Message arrived on topic: ");
+  Serial.print(topic);
+  Serial.print(". Message: ");
+  String messageTemp;
+  
+  for (int i = 0; i < length; i++) {
+    Serial.print((char)message[i]);
+    messageTemp += (char)message[i];
+  }
+  Serial.println();
+
+  // Feel free to add more if statements to control more GPIOs with MQTT
+
+  // If a message is received on the topic esp32/output, you check if the message is either "on" or "off". 
+  // Changes the output state according to the message
+  if (String(topic) == "esp32/output") {
+
+  }
 }
 
-void setup() {
 
+void reconnect() {
+  // Loop until we're reconnected
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    // Attempt to connect
+    if (client.connect("esp32")) {
+      Serial.println("connected");
+      // Subscribe
+      client.subscribe("esp32/output");
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+}
+
+
+void setup() {
   Serial.begin(115200);
   display.init();
 
@@ -89,31 +151,25 @@ void setup() {
   Serial.println();
   Serial.print("Connecting to ");
   Serial.println(ssid);
-  delay(1000);
+  delay(500);
   loadSensorData();
   showSensorData();
   WiFi.begin(ssid, password);
+  Serial.print("Connecting to ");
 
-//  xTaskCreate(
-//                    coreTask,   /* Function to implement the task */
-//                    "coreTask", /* Name of the task */
-//                    10000,      /* Stack size in words */
-//                    NULL,       /* Task input parameter */
-//                    1,          /* Priority of the task */
-//                    NULL       /* Task handle. */
-//                    ); 
-  // attempt to connect to Wifi network:
   while (WiFi.status() != WL_CONNECTED) {
     // Connect to WPA/WPA2 network. Change this line if using open or WEP network:
     delay(500);
     Serial.print(".");
   }
+  getExternalIp();
   Serial.println("");
   Serial.println("WiFi connected");
   Serial.println("IP address: ");
   Serial.println(WiFi.localIP());
-
   server.begin();
+  client.setServer(mqtt_server, 1883);
+  client.setCallback(callback);
 //  gettimeofday(past_time, NULL);
 }
 
@@ -123,74 +179,23 @@ void loop() {
   //  delay(500); // wait for half a second or 500 milliseconds
   //  digitalWrite (ledPin, LOW); // turn off the LED
   //  delay(500); // wait for half a second or 500 milliseconds
-
+  if (!client.connected()) {
+    reconnect();
+  }
+  client.loop();
+  
   if(sensorCounter > 1000000){
     sensorCounter = 0;
     loadSensorData();
-    showSensorData();    
+    showSensorData();
+    char json[80];
+    strcpy(json, "{ \"temperature\":");
+    strcat(json, celsiusTemp);
+    strcat(json, ", \"humidity\":");
+    strcat(json, humidityTemp);
+    strcat(json, "}");
+    client.publish("esp32/humidity", json);
   }
-
   sensorCounter++;
-  
-
-
-
-  WiFiClient client = server.available();
-  if (client) {
-    Serial.println("New client");
-    memset(linebuf, 0, sizeof(linebuf));
-    charcount = 0;
-    // an http request ends with a blank line
-    boolean currentLineIsBlank = true;
-    while (client.connected()) {
-      if (client.available()) {
-        char c = client.read();
-        Serial.write(c);
-        linebuf[charcount] = c;
-        if (charcount < sizeof(linebuf) - 1) charcount++;
-        if (c == '\n' && currentLineIsBlank) {
-          // send a standard http response header
-          client.println("HTTP/1.1 200 OK");
-          client.println("Content-Type: text/html");
-          client.println("Connection: close");  // the connection will be closed after completion of the response
-          client.println();
-          client.println("<!DOCTYPE HTML><html><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
-          client.println("<meta http-equiv=\"refresh\" content=\"30\"></head>");
-          client.println("<body><div style=\"font-size: 3.5rem;\"><p>ESP32 - DHT</p><p>");
-          if (atoi(celsiusTemp) >= 25) {
-            client.println("<div style=\"color: #930000;\">");
-          }
-          else if (atoi(celsiusTemp) < 25 && atoi(celsiusTemp) >= 5) {
-            client.println("<div style=\"color: #006601;\">");
-          }
-          else if (atoi(celsiusTemp) < 5) {
-            client.println("<div style=\"color: #009191;\">");
-          }
-          client.println(celsiusTemp);
-          client.println("*C</p><p>");
-          client.println(fahrenheitTemp);
-          client.println("*F</p></div><p>");
-          client.println(humidityTemp);
-          client.println("%</p></div>");
-          client.println("</body></html>");
-          break;
-        }
-        if (c == '\n') {
-          // you're starting a new line
-          currentLineIsBlank = true;
-          memset(linebuf, 0, sizeof(linebuf));
-          charcount = 0;
-        } else if (c != '\r') {
-          // you've gotten a character on the current line
-          currentLineIsBlank = false;
-        }
-      }
-    }
-    // give the web browser time to receive the data
-    delay(1);
-
-    // close the connection:
-    client.stop();
-    Serial.println("client disconnected");
-  }
+ 
 }

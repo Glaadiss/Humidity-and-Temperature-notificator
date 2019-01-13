@@ -130,64 +130,6 @@ void reconnect()
   }
 }
 
-void isConnectingTo(String ssid)
-{
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
-  while (WiFi.status() != WL_CONNECTED)
-  {
-    // Connect to WPA/WPA2 network. Change this line if using open or WEP network:
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("");
-  Serial.println("WiFi connected");
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
-}
-
-void checkAndConnect(String ssid)
-{
-  if (ssid.equals("dd-wrt_vap"))
-  {
-    WiFi.begin(ssid.c_str(), "");
-  }
-  else if (ssid.equals("MISZCZU ver.BETA"))
-  {
-    WiFi.begin(ssid.c_str(), "igorciul");
-  }
-  else if (ssid.equals("Glaadiss"))
-  {
-    WiFi.begin(ssid.c_str(), "worms1234");
-  }
-  else
-  {
-    return;
-  }
-  isConnectingTo(ssid);
-}
-
-void scanAndConnect()
-{
-  int n = WiFi.scanNetworks();
-  Serial.println("scan done");
-  if (n == 0)
-  {
-    Serial.println("no networks found");
-  }
-  else
-  {
-    Serial.print(n);
-    Serial.println(" networks found");
-    for (int i = 0; i < n; ++i)
-    {
-      checkAndConnect(WiFi.SSID(i));
-      Serial.println(WiFi.SSID(i));
-      delay(10);
-    }
-  }
-}
-
 void setup()
 {
   Serial.begin(115200);
@@ -203,6 +145,7 @@ void setup()
 //  scanAndConnect();
   if(Portal.begin()){
     Serial.println("WiFi connected: " + WiFi.localIP().toString());
+    
   }
   client.setServer(mqtt_server, 1883);
   client.setCallback(callback);

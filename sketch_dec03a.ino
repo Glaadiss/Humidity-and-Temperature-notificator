@@ -5,88 +5,82 @@
 #include <PubSubClient.h>
 #include <WiFiClient.h>
 #include "SSD1306.h"
-
-dht DHT;
+#include "AutoConnect.h"
 
 #define DHT22_PIN 5
 
+dht DHT;
 
 HTTPClient http;
-const char* ssid = "Glaadiss";
-const char* password = "worms1234";
-const char* ssid2     = "MISZCZU ver.BETA";
-const char* password2 = "igorciul";
-
-WiFiServer server(80);
+bool passedIp = false;
+WebServer server;
+AutoConnect Portal(server);
 WiFiClient espClient;
-const char* mqtt_server = "35.234.88.22";
+const char *mqtt_server = "35.233.127.48";
 PubSubClient client(espClient);
 
 static char celsiusTemp[7];
-static char fahrenheitTemp[7];
 static char humidityTemp[7];
 SSD1306 display(0x3c, 21, 22);
 
-// Client variables
 char linebuf[80];
 int charcount = 0;
 int chk;
-float h, t, f;
+bool initialLoad = true;
+float h, t, tempH, tempT;
 int sensorCounter = 0;
 static int taskCore = 0;
 
-void loadSensorData() {
-  chk = DHT.read22(DHT22_PIN);
-  // Sensor readings may also be up to 2 seconds 'old' (its a very slow sensor)
-  h = DHT.humidity;
-  // Read temperature as Celsius (the default)
-  t = DHT.temperature;
-  // Read temperature as Fahrenheit (isFahrenheit = true)
-  f = DHT.temperature;
-  Serial.println(h);
-  Serial.println(t);
-
-  if (h == -999.0 || t == -999.0) {
-    Serial.println("Failed to read from DHT sensor!");
-  }
-  else {
-    dtostrf(t, 6, 2, celsiusTemp);
-    dtostrf(t, 6, 2, fahrenheitTemp);
-    dtostrf(h, 6, 2, humidityTemp);
-  }
-
-}
-
-void getExternalIp()
+void loadSensorData()
 {
-  WiFiClient client;
-  if (!client.connect("api.ipify.org", 80)) {
-    Serial.println("Failed to connect with 'api.ipify.org' !");
+  chk = DHT.read22(DHT22_PIN);
+  tempH = DHT.humidity;
+  tempT = DHT.temperature;
+  if (tempH == -999.0 || tempT == -999.0)
+  {
+    Serial.println("Failed to read from DHT sensor!");
+    return;
   }
-  else {
-    int timeout = millis() + 5000;
-    client.print("GET /?format=json HTTP/1.1\r\nHost: api.ipify.org\r\n\r\n");
-    while (client.available() == 0) {
-      if (timeout - millis() < 0) {
-        Serial.println(">>> Client Timeout !");
-        client.stop();
-        return;
-      }
-    }
-    int size;
-    while ((size = client.available()) > 0) {
-      uint8_t* msg = (uint8_t*)malloc(size);
-      size = client.read(msg, size);
-      Serial.write(msg, size);
-      free(msg);
-    }
+  if (initialLoad)
+  {
+    h = tempH;
+    t = tempT;
+    initialLoad = false;
   }
+  else if (abs(tempH - h) < 100 && abs(tempT - t) < 100)
+  {
+    h = tempH;
+    t = tempT;
+  }
+  dtostrf(t, 6, 2, celsiusTemp);
+  dtostrf(h, 6, 2, humidityTemp);
 }
 
-void showSensorData(){
-//  display.setColor(BLACK);
-//  display.fillRect(0, 0, 120, 80);
-//  display.setColor(INVERSE);
+void getExternalIpData()
+{
+  String payload = String("");
+  if ((WiFi.status() == WL_CONNECTED))
+  {
+    HTTPClient http;
+    http.begin("http://api.ipify.org/?format=json");
+    int httpCode = http.GET();
+
+    if (httpCode > 0)
+    {
+      payload = http.getString();
+    }
+    else
+    {
+      Serial.println("Error on HTTP request");
+    }
+
+    http.end(); //Free the resources
+  }
+  client.publish("esp32/humidity", payload.c_str());
+}
+
+void showSensorData()
+{
   display.resetDisplay();
   display.setFont(ArialMT_Plain_24);
   int span = display.getStringWidth("********");
@@ -97,38 +91,36 @@ void showSensorData(){
   display.display();
 }
 
-void callback(char* topic, byte* message, unsigned int length) {
+void callback(char *topic, byte *message, unsigned int length)
+{
   Serial.print("Message arrived on topic: ");
   Serial.print(topic);
   Serial.print(". Message: ");
   String messageTemp;
-  
-  for (int i = 0; i < length; i++) {
+
+  for (int i = 0; i < length; i++)
+  {
     Serial.print((char)message[i]);
     messageTemp += (char)message[i];
   }
   Serial.println();
-
-  // Feel free to add more if statements to control more GPIOs with MQTT
-
-  // If a message is received on the topic esp32/output, you check if the message is either "on" or "off". 
-  // Changes the output state according to the message
-  if (String(topic) == "esp32/output") {
-
-  }
 }
 
-
-void reconnect() {
+void reconnect()
+{
   // Loop until we're reconnected
-  while (!client.connected()) {
+  while (!client.connected())
+  {
     Serial.print("Attempting MQTT connection...");
     // Attempt to connect
-    if (client.connect("esp32")) {
+    if (client.connect("esp32"))
+    {
       Serial.println("connected");
       // Subscribe
       client.subscribe("esp32/output");
-    } else {
+    }
+    else
+    {
       Serial.print("failed, rc=");
       Serial.print(client.state());
       Serial.println(" try again in 5 seconds");
@@ -138,53 +130,103 @@ void reconnect() {
   }
 }
 
-
-void setup() {
-  Serial.begin(115200);
-  display.init();
-
-  while (!Serial) {
-
-  }
-
-  Serial.println();
-  Serial.println();
+void isConnectingTo(String ssid)
+{
   Serial.print("Connecting to ");
   Serial.println(ssid);
-  delay(500);
-  loadSensorData();
-  showSensorData();
-  WiFi.begin(ssid, password);
-  Serial.print("Connecting to ");
-
-  while (WiFi.status() != WL_CONNECTED) {
+  while (WiFi.status() != WL_CONNECTED)
+  {
     // Connect to WPA/WPA2 network. Change this line if using open or WEP network:
     delay(500);
     Serial.print(".");
   }
-  getExternalIp();
   Serial.println("");
   Serial.println("WiFi connected");
   Serial.println("IP address: ");
   Serial.println(WiFi.localIP());
-  server.begin();
-  client.setServer(mqtt_server, 1883);
-  client.setCallback(callback);
-//  gettimeofday(past_time, NULL);
 }
 
-void loop() {
+void checkAndConnect(String ssid)
+{
+  if (ssid.equals("dd-wrt_vap"))
+  {
+    WiFi.begin(ssid.c_str(), "");
+  }
+  else if (ssid.equals("MISZCZU ver.BETA"))
+  {
+    WiFi.begin(ssid.c_str(), "igorciul");
+  }
+  else if (ssid.equals("Glaadiss"))
+  {
+    WiFi.begin(ssid.c_str(), "worms1234");
+  }
+  else
+  {
+    return;
+  }
+  isConnectingTo(ssid);
+}
 
-  //  digitalWrite (ledPin, HIGH);  // turn on the LED
-  //  delay(500); // wait for half a second or 500 milliseconds
-  //  digitalWrite (ledPin, LOW); // turn off the LED
-  //  delay(500); // wait for half a second or 500 milliseconds
-  if (!client.connected()) {
+void scanAndConnect()
+{
+  int n = WiFi.scanNetworks();
+  Serial.println("scan done");
+  if (n == 0)
+  {
+    Serial.println("no networks found");
+  }
+  else
+  {
+    Serial.print(n);
+    Serial.println(" networks found");
+    for (int i = 0; i < n; ++i)
+    {
+      checkAndConnect(WiFi.SSID(i));
+      Serial.println(WiFi.SSID(i));
+      delay(10);
+    }
+  }
+}
+
+void setup()
+{
+  Serial.begin(115200);
+  display.init();
+
+  while (!Serial)
+  {
+  }
+
+  delay(500);
+  loadSensorData();
+  showSensorData();
+//  scanAndConnect();
+  if(Portal.begin()){
+    Serial.println("WiFi connected: " + WiFi.localIP().toString());
+  }
+  client.setServer(mqtt_server, 1883);
+  client.setCallback(callback);
+  Serial.println("works");
+}
+
+void loop()
+{
+  Portal.handleClient();
+  if (!client.connected())
+  {
     reconnect();
+    passedIp = false;
+    delay(1000);
   }
   client.loop();
-  
-  if(sensorCounter > 1000000){
+  if (!passedIp)
+  {
+    passedIp = true;
+    getExternalIpData();
+  }
+
+  if (sensorCounter > 300000)
+  {
     sensorCounter = 0;
     loadSensorData();
     showSensorData();
@@ -196,6 +238,6 @@ void loop() {
     strcat(json, "}");
     client.publish("esp32/humidity", json);
   }
+
   sensorCounter++;
- 
 }
